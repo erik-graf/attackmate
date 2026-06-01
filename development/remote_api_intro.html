@@ -90,6 +90,7 @@
 <li class="toctree-l2"><a class="reference internal" href="#testing-the-api-server">Testing The API Server</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#metasploit">Metasploit</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#troubleshooting">Troubleshooting</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#installing-the-api-server-with-systemd">Installing The API Server With systemd</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#server-logs">Server Logs</a></li>
 </ul>
 </li>
@@ -155,6 +156,9 @@ runs on the remote AttackMate host and exposes an HTTPS API.</p></li>
 runs on the local/client host and sends commands or playbooks to the API
 server.</p></li>
 </ul>
+<p><cite>attackmate-client</cite> offers a CLI and a python library to execute commands and playbooks on a
+remote AttackMate server. It is only required on the client when you want to use the Remote API
+on an attackmate-api-server.</p>
 <p>The <a class="reference external" href="https://github.com/ait-testbed/attackmate-ansible">attackmate-ansible</a>
 role can install and configure both sides.</p>
 <section id="requirements">
@@ -163,14 +167,16 @@ role can install and configure both sides.</p>
 <ul class="simple">
 <li><p>AttackMate installed on the server.</p></li>
 <li><p>attackmate-api-server installed and running on the server.</p></li>
-<li><p>attackmate-client installed on the client.</p></li>
+<li><p>attackmate-client installed on the client, to access the remote API.</p></li>
 <li><p>The server TLS certificate copied to the client.</p></li>
 <li><p>A valid <code class="docutils literal notranslate"><span class="pre">remote_config</span></code> entry on the client, or provided as cli argument to <code class="docutils literal notranslate"><span class="pre">attackmate-client</span></code>.</p></li>
 <li><p>Any tools used by the remote playbook installed on the server, for example
 <code class="docutils literal notranslate"><span class="pre">msfrpcd</span></code> for Metasploit commands.</p></li>
 </ul>
-<p>It is recommended to install AttackMate on the client too. This allows the
-client to parse local wrapper playbooks and use the normal <code class="docutils literal notranslate"><span class="pre">attackm8</span></code> command.</p>
+<p>If you installed <code class="docutils literal notranslate"><span class="pre">Attackmate</span></code> on the client, it is not recommended to install <code class="docutils literal notranslate"><span class="pre">attackmate-client</span></code>, as it will
+already have pulled that in as a dependency.</p>
+<p>You can install just the <code class="docutils literal notranslate"><span class="pre">attackmate-client</span></code>, if all you want to do on the client is to send remote commands
+and playbooks to the attackmate-api-server via CLI or the python library.</p>
 </section>
 <section id="architecture">
 <h2>Architecture<a class="headerlink" href="#architecture" title="Permalink to this heading"></a></h2>
@@ -217,7 +223,7 @@ fail.</p>
 <div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">uv run attackm8 --debug remote_wrapper.yml</span>
 </pre></div>
 </div>
-<p>The client should log in to the API server, send the referenced playbook, and
+<p>The local attackmate should log in to the remote API server, send the referenced playbook, and
 print the remote execution result.</p>
 </section>
 <section id="testing-the-api-server">
@@ -252,6 +258,98 @@ server and the AttackMate server configuration must match it.</p>
 the remote playbook is still running, waiting for a session, or stuck in a tool
 such as Metasploit. Check the server logs and any AttackMate playbook logs.</p>
 <p>You can also increase the timeout period of attackmate-client by changing DEFAULT_TIMEOUT in <code class="docutils literal notranslate"><span class="pre">/usr/local/share/attackmate/.venv/lib/python3.12/site-packages/attackmate_client/attackmate_client.py</span></code></p>
+</section>
+<section id="installing-the-api-server-with-systemd">
+<h2>Installing The API Server With systemd<a class="headerlink" href="#installing-the-api-server-with-systemd" title="Permalink to this heading"></a></h2>
+<p>The recommended deployment is to let <code class="docutils literal notranslate"><span class="pre">attackmate-ansible</span></code> install the API
+server. Internally, the role installs <code class="docutils literal notranslate"><span class="pre">attackmate-api-server</span></code> into the same
+virtual environment as AttackMate and runs it as a dedicated systemd service
+user.</p>
+<p>The manual setup below mirrors the role’s systemd installation. It assumes
+AttackMate is already installed in <code class="docutils literal notranslate"><span class="pre">/usr/local/share/attackmate</span></code> and that its
+virtual environment exists at <code class="docutils literal notranslate"><span class="pre">/usr/local/share/attackmate/.venv</span></code>.</p>
+<p>Create a dedicated service user:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">sudo useradd --system --shell /usr/sbin/nologin --no-create-home attackmate-api</span>
+</pre></div>
+</div>
+<p>Clone and install the API server into the AttackMate virtual environment:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">sudo git clone https://github.com/ait-testbed/attackmate-api-server.git /usr/local/share/attackmate-api-server</span>
+<span class="go">cd /usr/local/share/attackmate-api-server</span>
+<span class="go">sudo uv pip install --python /usr/local/share/attackmate/.venv/bin/python .</span>
+<span class="go">sudo ln -sf /usr/local/share/attackmate/.venv/bin/attackmate-api /usr/local/bin/attackmate-api</span>
+</pre></div>
+</div>
+<p>Create the API log directory:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">sudo mkdir -p /var/log/attackmate-api</span>
+<span class="go">sudo chown attackmate-api:attackmate-api /var/log/attackmate-api</span>
+<span class="go">sudo chmod 0755 /var/log/attackmate-api</span>
+</pre></div>
+</div>
+<p>Create TLS directories and a self-signed certificate. Replace <code class="docutils literal notranslate"><span class="pre">10.0.0.5</span></code> with
+the API server address clients will connect to:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">sudo install -d -m 0710 -o root -g attackmate-api /etc/ssl/private</span>
+<span class="go">sudo install -d -m 0755 -o root -g root /etc/ssl/certs</span>
+<span class="go">sudo openssl req -x509 -newkey rsa:4096 -sha256 -days 825 -nodes \</span>
+<span class="go">  -keyout /etc/ssl/private/attackmate.key \</span>
+<span class="go">  -out /etc/ssl/certs/attackmate.pem \</span>
+<span class="go">  -subj &quot;/CN=10.0.0.5&quot; \</span>
+<span class="go">  -addext &quot;subjectAltName=IP:10.0.0.5,DNS:localhost&quot;</span>
+<span class="go">sudo chown root:attackmate-api /etc/ssl/private/attackmate.key</span>
+<span class="go">sudo chmod 0640 /etc/ssl/private/attackmate.key</span>
+<span class="go">sudo chmod 0644 /etc/ssl/certs/attackmate.pem</span>
+</pre></div>
+</div>
+<p>Create <code class="docutils literal notranslate"><span class="pre">/usr/local/share/attackmate-api-server/.env</span></code>:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">sudo install -o attackmate-api -g attackmate-api -m 0600 /dev/null /usr/local/share/attackmate-api-server/.env</span>
+<span class="go">sudoedit /usr/local/share/attackmate-api-server/.env</span>
+</pre></div>
+</div>
+<p>Example <code class="docutils literal notranslate"><span class="pre">.env</span></code>:</p>
+<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>SSL_KEY_PATH=&quot;/etc/ssl/private/attackmate.key&quot;
+SSL_CERT_PATH=&quot;/etc/ssl/certs/attackmate.pem&quot;
+ATTACKMATE_CONFIG_PATH=&quot;/etc/attackmate.yml&quot;
+WRITE_PLAYBOOK_LOGS_TO_DISK=&quot;False&quot;
+LOG_DIR=&quot;/var/log/attackmate-api&quot;
+ATTACKMATE_API_SERVER_PORT=&quot;8445&quot;
+USERS=&#39;{&quot;admin&quot;: &quot;$argon2id$v=19$m=65536,t=3,p=4$...&quot;}&#39;
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">USERS</span></code> contains username-to-Argon2-hash mappings. You can generate a hash
+with:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">python3 -c &quot;from argon2 import PasswordHasher; print(PasswordHasher().hash(&#39;securepassword&#39;))&quot;</span>
+</pre></div>
+</div>
+<p>Install the systemd unit at <code class="docutils literal notranslate"><span class="pre">/etc/systemd/system/attackmate-api.service</span></code>:</p>
+<div class="highlight-ini notranslate"><div class="highlight"><pre><span></span><span class="k">[Unit]</span>
+<span class="na">Description</span><span class="o">=</span><span class="s">AttackMate API Server</span>
+<span class="na">After</span><span class="o">=</span><span class="s">network.target</span>
+
+<span class="k">[Service]</span>
+<span class="na">Type</span><span class="o">=</span><span class="s">simple</span>
+<span class="na">User</span><span class="o">=</span><span class="s">attackmate-api</span>
+<span class="na">Group</span><span class="o">=</span><span class="s">attackmate-api</span>
+<span class="na">WorkingDirectory</span><span class="o">=</span><span class="s">/usr/local/share/attackmate-api-server</span>
+<span class="na">EnvironmentFile</span><span class="o">=</span><span class="s">/usr/local/share/attackmate-api-server/.env</span>
+<span class="na">ExecStart</span><span class="o">=</span><span class="s">/usr/local/bin/attackmate-api</span>
+<span class="na">Restart</span><span class="o">=</span><span class="s">on-failure</span>
+
+<span class="na">NoNewPrivileges</span><span class="o">=</span><span class="s">yes</span>
+<span class="na">PrivateTmp</span><span class="o">=</span><span class="s">yes</span>
+<span class="na">ProtectSystem</span><span class="o">=</span><span class="s">full</span>
+<span class="na">ProtectHome</span><span class="o">=</span><span class="s">yes</span>
+
+<span class="k">[Install]</span>
+<span class="na">WantedBy</span><span class="o">=</span><span class="s">multi-user.target</span>
+</pre></div>
+</div>
+<p>Enable and start the service:</p>
+<div class="highlight-console notranslate"><div class="highlight"><pre><span></span><span class="go">sudo systemctl daemon-reload</span>
+<span class="go">sudo systemctl enable --now attackmate-api</span>
+<span class="go">sudo systemctl status attackmate-api</span>
+</pre></div>
+</div>
+<p>Copy <code class="docutils literal notranslate"><span class="pre">/etc/ssl/certs/attackmate.pem</span></code> from the server to the client and use it
+as the <code class="docutils literal notranslate"><span class="pre">cafile</span></code> in the client’s <code class="docutils literal notranslate"><span class="pre">remote_config</span></code>.</p>
 </section>
 <section id="server-logs">
 <h2>Server Logs<a class="headerlink" href="#server-logs" title="Permalink to this heading"></a></h2>
